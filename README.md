@@ -164,7 +164,7 @@ kubectl apply -f k8s/05-my-mcp-server.yaml
 kubectl rollout status deploy/my-mcp-server --timeout=120s
 ```
 
-First click `Reconnect`, then re-run **List Tools** in the Inspector (reconnect if needed). The `my-mcp-server-*` tools now appear alongside the others, no config edit required.
+First click **Reconnect**, then re-run **List Tools** in the Inspector. The `my-mcp-server-*` tools now appear alongside the others, no config edit required.
 
 ---
 
