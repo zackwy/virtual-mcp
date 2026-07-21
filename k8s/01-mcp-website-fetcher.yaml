@@ -1,0 +1,38 @@
+# mcp-website-fetcher
+#
+# A small MCP server that fetches a URL and returns its contents. It is served
+# over SSE, NOT streamable HTTP. Virtual MCP label selectors only support
+# streamable HTTP, so this server is federated as a *static* target instead
+# (see k8s/03-virtual-mcp-backend.yaml). This shows both federation styles in
+# a single backend.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-website-fetcher
+spec:
+  selector:
+    matchLabels:
+      app: mcp-website-fetcher
+  template:
+    metadata:
+      labels:
+        app: mcp-website-fetcher
+    spec:
+      containers:
+        - name: mcp-website-fetcher
+          image: ghcr.io/peterj/mcp-website-fetcher:main
+          imagePullPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-website-fetcher
+  labels:
+    app: mcp-website-fetcher
+spec:
+  selector:
+    app: mcp-website-fetcher
+  ports:
+    - port: 80
+      targetPort: 8000
+      appProtocol: agentgateway.dev/mcp

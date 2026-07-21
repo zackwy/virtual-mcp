@@ -1,0 +1,50 @@
+# my-mcp-server
+#
+# A THIRD MCP server, deployed during the demo to show the federation growing
+# by nothing more than adding a labeled Service.
+#
+# The image is built and loaded locally (see README "Scale the Federation"),
+# so imagePullPolicy is IfNotPresent to use the node-local image.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-mcp-server
+  labels:
+    app: my-mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-mcp-server
+  template:
+    metadata:
+      labels:
+        app: my-mcp-server
+    spec:
+      containers:
+        - name: my-mcp-server
+          image: my-mcp-server:latest
+          imagePullPolicy: IfNotPresent
+          # Serve streamable HTTP at /mcp on :3001 (FastMCP native HTTP transport).
+          command: ["python", "src/main.py"]
+          args: ["--transport", "http", "--host", "0.0.0.0", "--port", "3001"]
+          ports:
+            - containerPort: 3001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-mcp-server
+  labels:
+    app: my-mcp-server
+    # This label is what the Virtual MCP selector matches on.
+    type: mcp-server
+spec:
+  selector:
+    app: my-mcp-server
+  ports:
+    - protocol: TCP
+      port: 3001
+      targetPort: 3001
+      appProtocol: agentgateway.dev/mcp
+  type: ClusterIP

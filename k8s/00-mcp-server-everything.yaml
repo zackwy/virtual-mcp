@@ -1,0 +1,47 @@
+# mcp-server-everything
+#
+# The reference MCP server maintained by the MCP project. It exposes a broad
+# set of demo tools (echo, add, longRunningOperation, printEnv, etc.) and is
+# served over streamable HTTP, which means it can be federated by Virtual MCP
+# using a label selector (no static host/port needed).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server-everything
+  labels:
+    app: mcp-server-everything
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server-everything
+  template:
+    metadata:
+      labels:
+        app: mcp-server-everything
+    spec:
+      containers:
+        - name: mcp-server-everything
+          image: node:20-alpine
+          command: ["npx"]
+          args: ["-y", "@modelcontextprotocol/server-everything", "streamableHttp"]
+          ports:
+            - containerPort: 3001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server-everything
+  labels:
+    app: mcp-server-everything
+    type: mcp-server
+spec:
+  selector:
+    app: mcp-server-everything
+  ports:
+    - protocol: TCP
+      port: 3001
+      targetPort: 3001
+      # appProtocol tells agentgateway to treat this Service as an MCP target.
+      appProtocol: agentgateway.dev/mcp
+  type: ClusterIP

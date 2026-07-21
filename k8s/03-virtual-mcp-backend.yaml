@@ -1,0 +1,35 @@
+# The heart of the demo: a single EnterpriseAgentgatewayBackend that federates
+# multiple independent MCP servers into one virtual MCP endpoint.
+#
+# Three targets, two federation styles:
+#   - mcp-server-everything : streamable HTTP  -> matched by label SELECTOR.
+#   - mcp-website-fetcher   : SSE              -> declared as a STATIC target,
+#                             because label selectors only support streamable
+#                             HTTP today.
+#   - mcp-filesystem        : streamable HTTP  -> matched by label SELECTOR.
+#                             Selector declared up front; the workload is added
+#                             later to show it joining with no config change.
+#
+# Tools from every target are surfaced through one connection, prefixed with
+# their originating target name (e.g. mcp-server-everything_echo).
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayBackend
+metadata:
+  name: mcp
+spec:
+  mcp:
+    # FailOpen: if one target is unreachable, still serve tools from the rest
+    # instead of failing the whole federated listing. Comment out for strict
+    # (FailClosed) behavior.
+    failureMode: FailOpen
+    targets:
+      - name: mcp-servers
+        selector:
+          services:
+            matchLabels:
+              type: mcp-server # Checks for type=mcp-server label on K8s Service
+      - name: mcp-website-fetcher
+        static:
+          host: mcp-website-fetcher.default.svc.cluster.local
+          port: 80
+          protocol: SSE
