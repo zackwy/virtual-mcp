@@ -168,6 +168,35 @@ First click **Reconnect**, then re-run **List Tools** in the Inspector. The `my-
 
 ---
 
+## Kiro
+
+To connect to the unified MCP endpoint in the Kiro IDE, add a `.kiro/settings/mcp.json` to your workspace:
+
+```bash
+mkdir -p .kiro/settings
+cat <<EOF >> .kiro/settings/mcp.json
+{
+  "mcpServers": {
+    "ARCTL": {
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+EOF
+```
+
+Then open in Kiro:
+
+```bash
+kiro .
+```
+
+You can now see all avialable tools in the Kiro panel -> MCP servers list:
+
+![Kiro tools list](./img/kiro-tools.png)
+
+---
+
 ## Configuration
 
 Everything is driven by [`k8s/03-virtual-mcp-backend.yaml`](k8s/03-virtual-mcp-backend.yaml).
