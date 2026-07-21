@@ -144,7 +144,7 @@ In the Inspector UI:
 - **URL:** `http://localhost:8080/mcp`
 - Click **Connect**, then open the **Tools** tab and **List Tools**.
 
-✅ **You should see tools from _both_ servers in one list** — the `mcp-server-everything` tools (`echo`, `add`, `printEnv`, `longRunningOperation`, …) alongside the `fetch` tool from `mcp-website-fetcher`. Two separate servers, one endpoint, one connection.
+You should see tools from _both_ servers in one list the `mcp-server-everything` tools (`echo`, `add`, `printEnv`, `longRunningOperation`, …) alongside the `fetch` tool from `mcp-website-fetcher`. Two separate servers, one endpoint, one connection.
 
 ---
 
@@ -164,7 +164,7 @@ kubectl apply -f k8s/05-my-mcp-server.yaml
 kubectl rollout status deploy/my-mcp-server --timeout=120s
 ```
 
-Re-run **List Tools** in the Inspector (reconnect if needed). The `my-mcp-server-*` tools now appear alongside the others, no config edit required.
+First click `Reconnect`, then re-run **List Tools** in the Inspector (reconnect if needed). The `my-mcp-server-*` tools now appear alongside the others, no config edit required.
 
 ---
 
