@@ -197,6 +197,131 @@ You can now see all avialable tools in the Kiro panel -> MCP servers list:
 
 ---
 
+## Tracing
+
+Install Tempo and Grafana:
+
+```bash
+helm repo add grafana-community https://grafana-community.github.io/helm-charts
+helm upgrade --install tempo grafana-community/tempo --namespace=telemetry
+helm upgrade --install grafana grafana-community/grafana --namespace=telemetry
+```
+
+Install OTEL Collector:
+
+```bash
+helm upgrade --install opentelemetry-collector-traces opentelemetry-collector \
+--repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+--version 0.127.2 \
+--set mode=deployment \
+--set image.repository="otel/opentelemetry-collector-contrib" \
+--set command.name="otelcol-contrib" \
+--namespace=telemetry \
+--create-namespace \
+-f -<<EOF
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+  exporters:
+    otlp/tempo:
+      endpoint: http://tempo.telemetry.svc.cluster.local:4317
+      tls:
+        insecure: true
+    debug:
+      verbosity: detailed
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [debug, otlp/tempo]
+EOF
+```
+
+Verify all pods are up and running in the `telemetry` namespace:
+
+```bash
+kubectl get pods -n telemetry
+```
+
+Create an `EnterpriseAgentgatewayPolicy` to configure tracing:
+
+```bash
+kubectl apply -f- <<EOF
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: tracing
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - kind: Gateway
+      name: agentgateway-proxy
+      group: gateway.networking.k8s.io
+  frontend:
+    tracing:
+      backendRef:
+        name: opentelemetry-collector-traces
+        namespace: telemetry
+        port: 4317
+      protocol: GRPC
+      clientSampling: "true"
+      randomSampling: "true"
+      resources:
+        - name: deployment.environment.name
+          expression: '"production"'
+        - name: service.version
+          expression: '"test"'
+      attributes:
+        add:
+          - expression: 'request.headers["x-header-tag"]'
+            name: request
+          - expression: 'request.host'
+            name: host
+EOF
+```
+
+Next, send 10 `tools/list` calls to generate trace data:
+
+```bash
+for i in {1..10}; do npx @modelcontextprotocol/inspector@0.21.2 http://localhost:8080/mcp  --method tools/list --cli >> /dev/null; done
+```
+
+Next, get the admin password for Grafana by retrieving the `admin-password` value from the `grafana` secret in the `telemetry` namespace:
+
+```bash
+kubectl get secret -n telemetry grafana -o jsonpath='{ .data.admin-password }' | base64 -d && echo
+```
+
+Then, port-forward Grafana and access the admin UI using the password retrieved above:
+
+```bash
+kubectl port-forward svc/grafana -n telemetry 3000:80
+```
+
+```bash
+open http://localhost:3000
+```
+
+Now you can add Tempo as a data source and query for traces. Add Tempo by clicking on `Connections -> Data Sources` then click to add a Tempo datasource.
+
+Under **URL**, add this: `http://tempo.telemetry.svc.cluster.local:3200`
+
+![Tempo data source](./img/tempo-datasource.png)
+
+Finally, you can now query for trace data using the `Explore` tab. Navigate to [http://localhost:3000/explore](http://localhost:3000/explore)
+
+Using TraceQL, you can query for traces you generated with: `{ .service.name = "agentgateway-proxy"}`
+
+![Tempo explore](./img/tempo-explore.png)
+
+---
+
 ## Configuration
 
 Everything is driven by [`k8s/03-virtual-mcp-backend.yaml`](k8s/03-virtual-mcp-backend.yaml).
