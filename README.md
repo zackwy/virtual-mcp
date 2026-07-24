@@ -9,22 +9,21 @@ Instead of every AI client wiring up a separate connection, URL, and credential 
 ## Architecture
 
 ```
-                         ┌───────────────────────────────────────────┐
-                         │        agentgateway  (Virtual MCP)          │
-   MCP client            │                                             │
-   (Inspector,   ──────► │   HTTPRoute  /mcp                           │
-    Kiro,    streamable  │        │                                    │
-    agent)      HTTP     │        ▼                                    │
-                         │   EnterpriseAgentgatewayBackend "mcp"       │
-                         │        │                                    │
-                         │        ├─ selector  app=mcp-server-everything│──► mcp-server-everything  (streamable HTTP)
-                         │        │                                    │      └─ echo, add, printEnv, ...
-                         │        ├─ static    mcp-website-fetcher     │──► mcp-website-fetcher     (SSE)
-                         │        │                                    │      └─ fetch
-                         │        └─ selector  app=my-mcp-server      │┈┈► my-mcp-server          (streamable HTTP)
-                         │                                             │      └─ read_file, write_file, list_directory, ...
-                         └───────────────────────────────────────────┘
-                                                                              (┈┈► added in the "Scale the Federation" step)
+                         ┌───────────────────────────────────────────────┐
+                         │        agentgateway  (Virtual MCP)            │
+   MCP client            │                                               │
+   (Inspector,   ──────► │   HTTPRoute  /mcp                             │
+    Kiro,    streamable  │        │                                      │
+    agent)      HTTP     │        ▼                                      │
+                         │   EnterpriseAgentgatewayBackend "mcp"         │
+                         │        │                                      │
+                         │        ├─ selector  app=mcp-server-everything │──► mcp-server-everything  (streamable HTTP)
+                         │        │                                      │      └─ echo, add, printEnv, ...
+                         │        ├─ static    mcp-website-fetcher       │──► mcp-website-fetcher     (SSE)
+                         │        │                                      │      └─ fetch
+                         │        └─ selector  app=my-mcp-server         │┈┈► my-mcp-server          (streamable HTTP)
+                         │                                               │      └─ read_file, write_file, list_directory, ...
+                         └───────────────────────────────────────────────┘
 
    One connection  ──►  one endpoint  ──►  tools from every backing MCP server
    (tools are surfaced prefixed by target name, e.g. `mcp-server-everything_echo`)
@@ -55,7 +54,7 @@ The single `EnterpriseAgentgatewayBackend` federates several independent servers
 
 - A Kubernetes cluster (e.g. [Kind](https://kind.sigs.k8s.io/), k3d, or any managed cluster) with `kubectl` context set
 - [`helm`](https://helm.sh/docs/intro/install/) v3.x
-- A **Solo Enterprise for agentgateway** license key — [request a trial](https://www.solo.io/products/agentgateway)
+- A **Solo Enterprise for agentgateway** license key: [request a trial](https://www.solo.io/products/agentgateway)
 - [Node.js](https://nodejs.org/) 20+ (for the MCP Inspector client, run via `npx`)
 - [agentregistry cli (arctl)](https://aregistry.ai/docs/quickstart/#setup)
 - [Docker Engine (Docker Desktop or similar)](https://docs.docker.com/desktop/)
@@ -116,11 +115,9 @@ kubectl rollout status deploy/mcp-website-fetcher --timeout=120s
 
 ### 5. Federate them with Virtual MCP
 
-This is the whole point of the demo — one backend, two servers:
-
 ```bash
-kubectl apply -f k8s/03-virtual-mcp-backend.yaml   # EnterpriseAgentgatewayBackend
-kubectl apply -f k8s/04-httproute.yaml             # exposes it at /mcp
+kubectl apply -f k8s/03-virtual-mcp-backend.yaml
+kubectl apply -f k8s/04-httproute.yaml
 kubectl describe httproute mcp
 ```
 
@@ -144,7 +141,7 @@ In the Inspector UI:
 - **URL:** `http://localhost:8080/mcp`
 - Click **Connect**, then open the **Tools** tab and **List Tools**.
 
-You should see tools from _both_ servers in one list the `mcp-server-everything` tools (`echo`, `add`, `printEnv`, `longRunningOperation`, …) alongside the `fetch` tool from `mcp-website-fetcher`. Two separate servers, one endpoint, one connection.
+You should see tools from _both_ servers in one list the `mcp-server-everything` tools (`echo`, `add`, `printEnv`, `longRunningOperation`, …) alongside the `fetch` tool from `mcp-website-fetcher`.
 
 ---
 
@@ -355,7 +352,7 @@ kubectl get gateway agentgateway-proxy -n agentgateway-system \
   -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}{"\n"}'
 ```
 
-Test `FailOpen`: scale one target to zero, then re-list tools in the Inspector — the surviving server's tools are still served.
+Test `FailOpen`: scale one target to zero, then re-list tools in the Inspector.
 
 ```bash
 kubectl scale deploy/mcp-website-fetcher --replicas=0
@@ -388,7 +385,7 @@ kubectl delete namespace agentgateway-system
 
 ```
 .
-├── README.md                            # This file — all demo instructions
+├── README.md
 └── k8s/
     ├── 00-mcp-server-everything.yaml     # MCP server #1 (streamable HTTP)
     ├── 01-mcp-website-fetcher.yaml       # MCP server #2 (SSE)
