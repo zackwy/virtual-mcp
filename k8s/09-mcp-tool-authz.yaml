@@ -1,0 +1,27 @@
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-tool-filter
+spec:
+  targetRefs:
+    - group: enterpriseagentgateway.solo.io
+      kind: EnterpriseAgentgatewayBackend
+      name: mcp
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+            # Read-only tools for the basic role.
+            - 'has(jwt.roles) && "Tools.Read" in jwt.roles && mcp.tool.name in ["echo", "get-sum"]'
+
+            # Whole-target grant, scoped by role. Anything mcp-website-fetcher
+            # gains later is covered automatically.
+            - 'has(jwt.roles) && "Web.Read" in jwt.roles && mcp.tool.target == "mcp-website-fetcher"'
+
+            # Prefix matching works, e.g. every get-* introspection tool.
+            - 'has(jwt.roles) && "Tools.Read" in jwt.roles && mcp.tool.name.startsWith("get-")'
+
+            # Admins get everything, on every federated target.
+            - 'has(jwt.roles) && "Tools.Admin" in jwt.roles'

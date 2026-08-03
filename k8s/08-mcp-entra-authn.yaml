@@ -1,0 +1,37 @@
+# Note: this YAML is intended to be used with envsubst to inject ENTRA_TENANT_ID / ENTRA_CLIENT_ID
+# envsubst < 08-mcp-entra-authn.yaml | kubectl apply -f -
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-entra-authn
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: mcp
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+        - issuer: https://sts.windows.net/${ENTRA_TENANT_ID}/
+          audiences:
+            - api://${ENTRA_CLIENT_ID}
+          jwks:
+            remote:
+              backendRef:
+                group: agentgateway.dev
+                kind: AgentgatewayBackend
+                name: entra-jwks
+                namespace: agentgateway-system
+              jwksPath: /${ENTRA_TENANT_ID}/discovery/v2.0/keys
+              cacheDuration: 10m
+      mcp:
+        clientId: ${ENTRA_CLIENT_ID}
+        resourceMetadata:
+          resource: http://localhost:8080/mcp
+          authorizationServers:
+            - https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0
+          scopesSupported:
+            - api://${ENTRA_CLIENT_ID}/mcp_access
+          bearerMethodsSupported:
+            - header

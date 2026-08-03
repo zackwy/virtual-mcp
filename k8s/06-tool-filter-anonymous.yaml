@@ -1,0 +1,19 @@
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-tool-filter
+spec:
+  targetRefs:
+    - group: enterpriseagentgateway.solo.io
+      kind: EnterpriseAgentgatewayBackend
+      name: mcp
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+            # Allow two specific tools from the everything-server by base name.
+            - 'mcp.tool.name in ["echo", "get-sum"]'
+            # Allow every tool from one federated target, whatever it exposes.
+            - 'mcp.tool.target == "mcp-website-fetcher"'
