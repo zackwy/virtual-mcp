@@ -1,0 +1,44 @@
+# Backend auth: the upstream OAuth leg.
+#
+# After the caller authenticates with Entra and accepts the gateway consent
+# screen, the gateway runs a second OAuth flow against Atlassian, stores the
+# resulting token against that user's downstream identity, and attaches it to
+# every subsequent MCP call. No Atlassian credential ever reaches the client.
+#
+# The gateway registers itself with Atlassian via dynamic client registration,
+# so there is no Atlassian app to create by hand.
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-atlassian-elicit
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: mcp-atlassian
+  backend:
+    entElicitation:
+      brokered:
+        mcpResourcePath: /mcp/atlassian
+        chainedAuth:
+          oauth:
+            # Must match the `issuer` in Atlassian's authorization server
+            # metadata, which is cf.mcp.atlassian.com -- NOT mcp.atlassian.com.
+            # The gateway rejects the flow if the two disagree.
+            baseUrl: https://cf.mcp.atlassian.com
+            scopes:
+              - read:jira-work
+              - read:confluence-content.summary
+              # Required for the gateway to refresh the upstream token; the
+              # consent grant lives until the refresh token expires.
+              - offline_access
+            clientName: Atlassian
+            # Overrides the controller-level consent defaults for this backend
+            # only. Set `disabled: true` to skip the consent screen entirely.
+            consent:
+              logoUrl: https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Atlassian-horizontal-blue-rgb.svg/3840px-Atlassian-horizontal-blue-rgb.svg.png
+              legalText: "By clicking Allow, you authorize the Virtual MCP gateway to read your Jira issues and Confluence pages on your behalf."
+    entTokenExchange:
+      solo:
+        elicitation: {}

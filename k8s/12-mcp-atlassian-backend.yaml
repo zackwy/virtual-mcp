@@ -1,0 +1,55 @@
+# The remote Atlassian MCP server, fronted by the gateway at /mcp/atlassian and
+# protected by the same Entra tenant used everywhere else in the demo.
+#
+# Authentication here is the DOWNSTREAM leg only -- it proves who the caller is.
+# The upstream leg (the gateway getting an Atlassian token on that user's behalf)
+# is configured in 13-mcp-atlassian-elicit.yaml.
+#
+# Note: this YAML is intended to be used with envsubst to inject
+# ENTRA_TENANT_ID / ENTRA_CLIENT_ID / GW_ADDRESS
+# envsubst < 12-mcp-atlassian-backend.yaml | kubectl apply -f -
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: mcp-atlassian
+  namespace: agentgateway-system
+spec:
+  mcp:
+    targets:
+      - name: mcp-target
+        static:
+          # Atlassian's streamable-HTTP MCP endpoint. /v1/sse is the SSE
+          # equivalent; /mcp/atlassian is a gateway-side path, not an upstream one.
+          path: /v1/mcp
+          host: mcp.atlassian.com
+          port: 443
+  policies:
+    tls: {}
+    mcp:
+      authentication:
+        mode: Strict
+        # Entra issues v1.0 access tokens by default. If you set
+        # "accessTokenAcceptedVersion": 2 in the app manifest, change this to
+        # https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0
+        issuer: https://sts.windows.net/${ENTRA_TENANT_ID}/
+        # Entra scopes the audience to the API's App ID URI -- it can't mint a
+        # token audienced to an arbitrary resource URL the way Keycloak can, so
+        # this is api://<client-id> rather than the /mcp/atlassian URL.
+        audiences:
+          - api://${ENTRA_CLIENT_ID}
+        jwks:
+          backendRef:
+            name: entra-jwks
+            group: agentgateway.dev
+            kind: AgentgatewayBackend
+          cacheDuration: 24h
+          jwksPath: /${ENTRA_TENANT_ID}/discovery/v2.0/keys
+        # RFC 9728 metadata. The issuer-proxy annotation is what makes MCP
+        # clients run the login through the gateway's OAuth issuer (so the
+        # consent screen and the upstream leg can be injected) instead of going
+        # straight to Entra.
+        resourceMetadata:
+          agentgateway.dev/issuer-proxy: "http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777/oauth-issuer"
+          authorizationServers:
+            - "http://${GW_ADDRESS}/mcp/atlassian"
+          resource: "http://${GW_ADDRESS}/mcp/atlassian"

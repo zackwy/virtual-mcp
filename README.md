@@ -51,6 +51,7 @@ The single `EnterpriseAgentgatewayBackend` federates several independent servers
 3. **Scale by label** — deploy a second streamable-HTTP server with the right label and it joins the federation automatically, with no change to the gateway, route, or backend.
 4. **Resilience** — `failureMode: FailOpen` keeps the surviving tools available even if one target is down.
 5. **Per-identity tool filtering** — an `EnterpriseAgentgatewayPolicy` gives each caller a different tool catalog from the same `/mcp` URL, keyed on Microsoft Entra ID app roles and enforced at the gateway.
+6. **Backend auth with a consent screen** — the gateway logs the user in with Entra, shows a branded authorization challenge, then runs a *second* OAuth flow with the remote Atlassian MCP server and holds that token on the user's behalf. The client never handles an Atlassian credential.
 
 ---
 
@@ -68,6 +69,11 @@ For the [tool filtering](#filter-tools-by-identity-microsoft-entra-id) section o
 - `envsubst` (`brew install gettext`) to substitute IDs into the Entra manifests
 - [`az` CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) to mint test tokens.
 - A Microsoft Entra ID tenant with permission to create an app registration
+
+For the [backend auth](#backend-auth-for-a-remote-mcp-server-atlassian) section only:
+
+- Solo Enterprise for agentgateway `v2026.8.0` or later (the consent screen is not in `v2026.7.0`)
+- An Atlassian Cloud account with Jira and/or Confluence access
 
 Set your license key:
 
@@ -338,6 +344,187 @@ mcp-server-everything-3001_get-tiny-image
 
 ---
 
+## Backend Auth for a Remote MCP Server (Atlassian)
+
+Everything so far protects the *front* door: the gateway checks who the caller is and which tools they may see. Backend auth solves the other half. When the MCP server itself is a third-party SaaS that wants its own OAuth token — like Atlassian's hosted MCP server — the gateway obtains that token *on the user's behalf* and attaches it upstream. The MCP client never sees, stores, or refreshes an Atlassian credential.
+
+The result is a **dual OAuth** flow with an organizational checkpoint in the middle:
+
+```
+   MCP client                agentgateway                    Entra ID      Atlassian
+       │                          │                              │             │
+       │──── connect /mcp/atlassian ─►│                          │             │
+       │◄─── 401 + RFC 9728 metadata ─┤  (points at /oauth-issuer)│            │
+       │                          │                              │             │
+       │──── authorize ──────────►│─── leg 1: downstream ───────►│             │
+       │                          │◄── id/access token ──────────┤             │
+       │                          │                                            │
+       │                     ┌────┴─────────────────┐                          │
+       │                     │  CONSENT SCREEN      │  gateway-hosted, branded │
+       │                     │  "Allow / Deny"      │  per backend             │
+       │                     └────┬─────────────────┘                          │
+       │                          │                                            │
+       │                          │─── leg 2: upstream OAuth ─────────────────►│
+       │                          │◄── access + refresh token ─────────────────┤
+       │◄─── gateway token ───────┤   stored against the user's Entra identity │
+       │                          │                                            │
+       │──── tools/call ─────────►│─── + Atlassian token ─────────────────────►│
+```
+
+Leg 1 is the Entra login you already configured. Leg 2 is new, and so is the consent screen between them: a gateway-rendered "Acme wants to read your Jira issues" challenge that is *yours*, not Atlassian's. The gateway records the grant keyed on the user's downstream identity plus the backend they authorized, and reuses it until the upstream refresh token expires.
+
+> This section follows the [MCP consent screen guide](https://docs.solo.io/agentgateway/latest/mcp/token-exchange/elicitations/consent-screen/), with Microsoft Entra ID in place of Keycloak as the downstream IdP. It needs **`v2026.8.0`** or later, and it exposes a *second* MCP endpoint at `/mcp/atlassian` — the federated `/mcp` endpoint from the earlier steps is untouched.
+
+### Step 1 — Make the Entra app usable as an OAuth client
+
+The gateway's OAuth issuer proxy is a confidential OAuth client (the equivalent of the guide's `agw-issuer` Keycloak client). The simplest path is to reuse the **same app registration** from the tool-filtering section as both the protected API and the issuer client — Entra lets a client request its own API scope, so no second registration or pre-authorization is needed. In the [Azure portal](https://portal.azure.com), on that app:
+
+1. `Authentication → Add a platform → Web`, redirect URI `http://localhost:8080/oauth-issuer/callback/downstream`
+   - Entra only allows plain `http` for `localhost`. If your gateway is reachable at a load-balancer address instead of a port-forward, that address must be **HTTPS**.
+2. `Certificates & secrets → New client secret.` Copy the **value** — it is only shown once.
+
+Or with the `az` CLI:
+
+```bash
+az ad app update --id <application (client) ID> \
+  --web-redirect-uris "http://localhost:8080/oauth-issuer/callback/downstream"
+```
+
+Export everything the manifests need:
+
+```bash
+export ENTRA_TENANT_ID=<directory (tenant) ID>          # same tenant as before
+export ENTRA_CLIENT_ID=<application (client) ID>        # the app from the previous section
+export ISSUER_CLIENT_ID=${ENTRA_CLIENT_ID}              # same app doing double duty
+export ISSUER_CLIENT_SECRET=<the client secret value>
+
+# Where the browser and MCP client reach the gateway. With the port-forward from
+# the Quick Start this is localhost:8080; otherwise use your LB address.
+export GW_ADDRESS=localhost:8080
+```
+
+> For a production-shaped setup, register the issuer as its **own** confidential app instead, grant it delegated `mcp_access` with admin consent, and pre-authorize it under `Expose an API → Add a client application` on the API app. Then `ISSUER_CLIENT_ID` is that app rather than `ENTRA_CLIENT_ID`.
+
+No Atlassian registration is needed. The gateway uses **dynamic client registration** against Atlassian for the upstream leg.
+
+### Step 2 — Turn on the STS and the OAuth issuer proxy
+
+Backend auth needs two things the Quick Start install doesn't have: the Security Token Service that stores per-user upstream tokens, and the controller's OAuth issuer configured against Entra. Both live in [`helm/enterprise-agentgateway-values.yaml`](helm/enterprise-agentgateway-values.yaml):
+
+```bash
+envsubst < helm/enterprise-agentgateway-values.yaml > /tmp/agw-values.yaml
+
+helm upgrade -i enterprise-agentgateway-crds \
+  oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway-crds \
+  -n agentgateway-system \
+  --version v2026.8.0
+
+helm upgrade -i enterprise-agentgateway \
+  oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway \
+  -n agentgateway-system \
+  --version v2026.8.0 \
+  -f /tmp/agw-values.yaml
+
+kubectl rollout status deploy -n agentgateway-system --timeout=180s
+```
+
+The `consent` block in those values is the **default** branding for every backend:
+
+| Field           | Purpose                                                                    |
+| --------------- | -------------------------------------------------------------------------- |
+| `enabled`       | Renders the consent screen at all.                                          |
+| `force_refresh` | `true` re-prompts on every flow; `false` reuses the grant until token expiry. |
+| `platform_name` | The name shown on the screen — your org, not the backend's.                 |
+| `logo_url`      | Optional branding image.                                                    |
+| `legal_text`    | Compliance copy shown above the Allow button.                               |
+
+### Step 3 — Wire the STS into the gateway proxy
+
+The proxy needs to know where to exchange tokens. This re-applies the Gateway from Step 3 of the Quick Start with a `parametersRef` added:
+
+```bash
+kubectl apply -f k8s/10-agw-params.yaml
+kubectl rollout status deploy/agentgateway-proxy -n agentgateway-system --timeout=120s
+```
+
+### Step 4 — Route to the OAuth issuer
+
+The consent screen and both OAuth callbacks are served by the controller on port `7777`. Publish them through the data plane so the browser can reach them at the same address as the MCP endpoint:
+
+```bash
+kubectl apply -f k8s/11-oauth-issuer-route.yaml
+```
+
+### Step 5 — Add the Atlassian backend and its auth
+
+```bash
+# Remote MCP server + downstream (Entra) authentication + RFC 9728 metadata
+envsubst < k8s/12-mcp-atlassian-backend.yaml | kubectl apply -f -
+
+# Upstream (Atlassian) OAuth leg + per-backend consent overrides
+kubectl apply -f k8s/13-mcp-atlassian-elicit.yaml
+
+# Expose it at /mcp/atlassian
+kubectl apply -f k8s/14-mcp-atlassian-httproute.yaml
+```
+
+The JWKS backend from the tool-filtering section (`k8s/07-entra-jwks-backend.yaml`) is reused for token validation, so apply that first if you skipped it.
+
+Two values in the upstream config are easy to get wrong, and both fail loudly:
+
+- **`baseUrl` must be `https://cf.mcp.atlassian.com`,** not `https://mcp.atlassian.com`. Atlassian serves its authorization-server metadata from both hosts but declares `"issuer": "https://cf.mcp.atlassian.com"` in each. The gateway requires `baseUrl` to equal that issuer and refuses the flow otherwise, with `/oauth-issuer/authorize` returning `500 {"error":"server_error"}` and this in the controller log:
+
+  ```
+  failed to start auth flow ... unknown resource: authorization server metadata
+  issuer "https://cf.mcp.atlassian.com" does not match base_url "https://mcp.atlassian.com"
+  ```
+
+- **The upstream target path is `/v1/mcp`** (Atlassian's streamable-HTTP endpoint; `/v1/sse` is the SSE one). `mcpResourcePath: /mcp/atlassian` in the policy is the path *on the gateway* — a different thing — and using it upstream gets a 404 from Atlassian.
+
+Two more things differ from the Keycloak version of the guide, both because of how Entra scopes tokens:
+
+- **Audience.** Keycloak can mint a token audienced to an arbitrary resource URL, so the guide uses `http://<gateway>/mcp/atlassian`. Entra scopes the audience to the API's App ID URI, so `12-mcp-atlassian-backend.yaml` validates `api://${ENTRA_CLIENT_ID}` instead — matching the provider already configured in `08-mcp-entra-authn.yaml`.
+- **Issuer.** Entra issues v1.0 tokens by default (`https://sts.windows.net/<tenant>/`). Set `"accessTokenAcceptedVersion": 2` in the app manifest and it becomes `https://login.microsoftonline.com/<tenant>/v2.0`. The JWKS path is the same either way.
+
+The `agentgateway.dev/issuer-proxy` annotation on `resourceMetadata` is the load-bearing part: it makes MCP clients start their login at the gateway's issuer rather than at Entra directly, which is what gives the gateway a place to insert the consent screen and leg 2.
+
+### Step 6 — Walk the flow
+
+```bash
+kubectl port-forward deployment/agentgateway-proxy -n agentgateway-system 8080:80
+npx @modelcontextprotocol/inspector@0.21.2
+```
+
+In the Inspector UI:
+
+- **Transport:** `Streamable HTTP`
+- **URL:** `http://localhost:8080/mcp/atlassian`
+- Click **Connect**.
+
+You should be walked through, in order:
+
+1. **Entra login** — the downstream leg, in a browser tab.
+2. **The gateway consent screen** — your branding, Atlassian's logo and legal text from `13-mcp-atlassian-elicit.yaml`.
+3. **Atlassian's own OAuth consent** — the upstream leg, requesting `read:jira-work` and `read:confluence-content.summary`.
+
+After that the Atlassian tools list and call successfully. Reconnect and the consent screen doesn't reappear — the grant is cached against your Entra identity until the Atlassian refresh token expires. Set `force_refresh: true` in the Helm values to prompt every time.
+
+### Opting a backend out of consent
+
+Consent is per-backend. An internal MCP server that doesn't need an organizational checkpoint can skip it while keeping the upstream OAuth leg:
+
+```yaml
+chainedAuth:
+  oauth:
+    baseUrl: https://mcp.internal.example.com
+    scopes: [openid, profile]
+    clientName: Internal Tools
+    consent:
+      disabled: true
+```
+
+---
+
 ## Kiro
 
 To connect to the unified MCP endpoint in the Kiro IDE, add a `.kiro/settings/mcp.json` to your workspace:
@@ -512,6 +699,17 @@ Tool filtering and authentication are driven by `EnterpriseAgentgatewayPolicy`:
 | `spec.traffic.jwtAuthentication.providers[]`          | Token issuer, audiences, and JWKS source. Attach to the `HTTPRoute`.  |
 | `spec.traffic.jwtAuthentication.mcp.resourceMetadata` | Publishes RFC 9728 Protected Resource Metadata so MCP clients can discover the IdP.      |
 
+Backend auth is split between the Helm values and a policy on the backend:
+
+| Field                                                     | Purpose                                                                                     |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `controller.extraEnv.KGW_OAUTH_ISSUER_CONFIG`             | The gateway's OAuth issuer proxy: its public base URL, the downstream IdP, and consent defaults. |
+| `tokenExchange.*`                                         | The STS that stores per-user upstream tokens and validates the downstream token being exchanged. |
+| `spec.backend.entElicitation.brokered.chainedAuth.oauth`  | The upstream OAuth leg — the remote MCP server's base URL, scopes, and client name.          |
+| `...chainedAuth.oauth.consent`                            | Per-backend consent overrides (`logoUrl`, `legalText`, `disabled`).                          |
+| `spec.backend.entTokenExchange.solo.elicitation`          | Attaches the elicited token to upstream calls.                                               |
+| `policies.mcp.authentication.resourceMetadata['agentgateway.dev/issuer-proxy']` | Routes client login through the gateway's issuer instead of straight to the IdP. |
+
 To target a different release, change `--version v2026.7.0` in the Helm commands to match your licensed version.
 
 ---
@@ -555,6 +753,56 @@ npx @modelcontextprotocol/inspector@0.21.2 http://localhost:8080/mcp --method to
   | grep '"name"'
 ```
 
+Check backend auth:
+
+```bash
+# The client's entry point -- must list the gateway itself as the auth server
+curl -s http://localhost:8080/.well-known/oauth-protected-resource/mcp/atlassian | jq
+
+# The issuer proxy is reachable through the data plane
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/oauth-issuer/.well-known/oauth-authorization-server
+
+# Elicitation policy accepted
+kubectl get enterpriseagentgatewaypolicy mcp-atlassian-elicit -n agentgateway-system \
+  -o jsonpath='{range .status.ancestors[0].conditions[*]}{.type}={.status} reason={.reason} msg={.message}{"\n"}{end}'
+
+# STS is running (no pod means tokenExchange.enabled didn't take)
+kubectl get pods -n agentgateway-system
+
+# The proxy picked up the STS env from the parametersRef
+kubectl get deploy agentgateway-proxy -n agentgateway-system \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STS_URI")].value}{"\n"}'
+```
+
+The most useful check before opening a browser is to drive `/authorize` directly. A `302` to `login.microsoftonline.com` means the whole chain — issuer config, Entra client, and Atlassian metadata discovery — is sound. A `500` means the upstream leg failed; the reason is in the controller log.
+
+```bash
+CID=${ENTRA_CLIENT_ID}
+curl -s -D - -o /dev/null "http://localhost:8080/oauth-issuer/authorize\
+?response_type=code&client_id=${CID}\
+&redirect_uri=http%3A%2F%2Flocalhost%3A9999%2Fcallback&state=probe\
+&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256\
+&resource=http%3A%2F%2Flocalhost%3A8080%2Fmcp%2Fatlassian" | grep -iE '^(HTTP|location)'
+
+kubectl logs -n agentgateway-system deploy/enterprise-agentgateway --tail=50 | grep 'auth flow'
+```
+
+The `Location` header should carry your `client_id`, the registered `redirect_uri`, and the scope set including `api://<client-id>/mcp_access`.
+
+You can also confirm JWT validation independently of the browser flow. A junk token must give `401`; a real Entra token should get *past* auth into MCP protocol handling (`400 mcp: session header is required for non-initialize requests` is the expected — and correct — response here):
+
+```bash
+TOKEN=$(az account get-access-token --resource api://${ENTRA_CLIENT_ID} --query accessToken -o tsv)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8080/mcp/atlassian \
+  -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+If the browser never reaches the consent screen, `base_url` in the Helm values almost certainly doesn't match the address you're actually browsing to — it has to be the externally reachable gateway address, not a cluster-internal service name.
+
+`failed resolving jwks ... isn't available (not yet fetched or fetch failed)` in the controller log at startup is a transient — the JWKS is fetched lazily on the first request. It only matters if it keeps recurring after the gateway has served traffic.
+
 An unexpectedly empty tool list could be caused by:
 
 - a rule matched `mcp.tool.target` against the *declared* target name instead of `<service>-<port>`
@@ -566,6 +814,15 @@ An unexpectedly empty tool list could be caused by:
 ## Cleanup
 
 ```bash
+# Backend auth (Atlassian)
+kubectl delete -f k8s/14-mcp-atlassian-httproute.yaml --ignore-not-found
+kubectl delete -f k8s/13-mcp-atlassian-elicit.yaml --ignore-not-found
+kubectl delete agentgatewaybackend mcp-atlassian -n agentgateway-system --ignore-not-found
+kubectl delete -f k8s/11-oauth-issuer-route.yaml --ignore-not-found
+kubectl delete enterpriseagentgatewayparameters agw-params -n agentgateway-system --ignore-not-found
+# Drops the parametersRef; re-apply 02 to restore the plain Gateway
+kubectl apply -f k8s/02-gateway.yaml
+
 # Tool filtering / Entra auth
 kubectl delete enterpriseagentgatewaypolicy mcp-tool-filter --ignore-not-found
 kubectl delete enterpriseagentgatewaypolicy mcp-entra-authn --ignore-not-found
@@ -592,6 +849,8 @@ kubectl delete namespace agentgateway-system
 ```
 .
 ├── README.md
+├── helm/
+│   └── enterprise-agentgateway-values.yaml  # STS + OAuth issuer proxy (Entra downstream)
 └── k8s/
     ├── 00-mcp-server-everything.yaml     # MCP server #1 (streamable HTTP)
     ├── 01-mcp-website-fetcher.yaml       # MCP server #2 (SSE)
@@ -602,7 +861,12 @@ kubectl delete namespace agentgateway-system
     ├── 06-tool-filter-anonymous.yaml     # ★ Tool filtering, no IdP required
     ├── 07-entra-jwks-backend.yaml        # login.microsoftonline.com as a static backend
     ├── 08-mcp-entra-authn.yaml           # Entra JWT validation + RFC 9728 metadata
-    └── 09-mcp-tool-authz.yaml            # ★ Tool filtering keyed on Entra app roles
+    ├── 09-mcp-tool-authz.yaml            # ★ Tool filtering keyed on Entra app roles
+    ├── 10-agw-params.yaml                # Gateway proxy wired to the STS
+    ├── 11-oauth-issuer-route.yaml        # Publishes the OAuth issuer proxy at /oauth-issuer
+    ├── 12-mcp-atlassian-backend.yaml     # Remote Atlassian MCP server + downstream Entra authn
+    ├── 13-mcp-atlassian-elicit.yaml      # ★ Upstream OAuth leg + consent screen
+    └── 14-mcp-atlassian-httproute.yaml   # Exposes Atlassian at /mcp/atlassian
 ```
 
 ---
@@ -611,7 +875,7 @@ kubectl delete namespace agentgateway-system
 
 | Component                          | Version    |
 | ---------------------------------- | ---------- |
-| Solo Enterprise for agentgateway   | `v2026.7.0` |
+| Solo Enterprise for agentgateway   | `v2026.7.0` (`v2026.8.0`+ for backend auth) |
 | Kubernetes Gateway API             | `v1.5.0`   |
 | MCP Inspector                      | `0.21.2`   |
 | Node.js (for Inspector)            | `20+`      |
@@ -624,6 +888,9 @@ kubectl delete namespace agentgateway-system
 - [Install Solo Enterprise for agentgateway](https://docs.solo.io/agentgateway/latest/quickstart/install/)
 - [MCP authorization (CEL rules)](https://agentgateway.dev/docs/standalone/main/mcp/mcp-authz/)
 - [Set up MCP auth](https://docs.solo.io/agentgateway/latest/mcp/auth/setup/)
+- [MCP elicitations and token exchange](https://docs.solo.io/agentgateway/latest/mcp/token-exchange/elicitations/)
+- [MCP consent screen](https://docs.solo.io/agentgateway/latest/mcp/token-exchange/elicitations/consent-screen/)
+- [Atlassian remote MCP server](https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/)
 - [Enterprise MCP SSO with Microsoft Entra and agentgateway](https://www.solo.io/blog/enterprise-mcp-sso-with-microsoft-entra-and-agentgateway)
 - [Microsoft Entra: configure app roles](https://learn.microsoft.com/entra/identity-platform/howto-add-app-roles-in-apps)
 - [Model Context Protocol](https://modelcontextprotocol.io)

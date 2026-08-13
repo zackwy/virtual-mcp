@@ -1,0 +1,71 @@
+# Helm values that turn on the pieces backend auth (elicitation + token exchange)
+# needs: the STS server, and the gateway's built-in OAuth issuer proxy pointed at
+# Microsoft Entra ID as the downstream IdP.
+#
+# Not a kubectl manifest -- render it with envsubst, then feed it to helm:
+#
+#   envsubst < helm/enterprise-agentgateway-values.yaml > /tmp/agw-values.yaml
+#   helm upgrade -i enterprise-agentgateway \
+#     oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway \
+#     -n agentgateway-system --version v2026.8.0 -f /tmp/agw-values.yaml
+#
+# Required env: AGENTGATEWAY_LICENSE_KEY, GW_ADDRESS, ENTRA_TENANT_ID,
+#               ENTRA_CLIENT_ID, ISSUER_CLIENT_ID, ISSUER_CLIENT_SECRET
+licensing:
+  licenseKey: ${AGENTGATEWAY_LICENSE_KEY}
+
+# Security Token Service. Mints and stores the per-user upstream tokens the
+# gateway obtains on the user's behalf, keyed on their downstream identity.
+tokenExchange:
+  enabled: true
+  issuer: "enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777"
+  tokenExpiration: 24h
+  # Downstream (Entra) tokens are the "subject" being exchanged, so the STS
+  # validates them against Entra's signing keys. The v2.0 keys endpoint serves
+  # keys for both v1.0 and v2.0 tokens.
+  subjectValidator:
+    validatorType: remote
+    remoteConfig:
+      url: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/discovery/v2.0/keys"
+  # The gateway proxy authenticates to the STS with its Kubernetes SA token.
+  actorValidator:
+    validatorType: k8s
+  apiValidator:
+    validatorType: remote
+    remoteConfig:
+      url: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/discovery/v2.0/keys"
+  maintenance:
+    enabled: true
+
+controller:
+  extraEnv:
+    # The gateway-hosted OAuth issuer proxy. It fronts Entra for the MCP client
+    # (leg 1), renders the consent screen, then runs the upstream OAuth leg with
+    # the MCP backend (leg 2).
+    KGW_OAUTH_ISSUER_CONFIG: |
+      {
+        "gateway_config": {
+          "base_url": "http://${GW_ADDRESS}/oauth-issuer"
+        },
+        "downstream_server": {
+          "name": "entra",
+          "client_id": "${ISSUER_CLIENT_ID}",
+          "client_secret": "${ISSUER_CLIENT_SECRET}",
+          "authorize_url": "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/authorize",
+          "token_url": "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token",
+          "scopes": [
+            "openid",
+            "profile",
+            "email",
+            "offline_access",
+            "api://${ENTRA_CLIENT_ID}/mcp_access"
+          ]
+        },
+        "consent": {
+          "enabled": true,
+          "force_refresh": false,
+          "platform_name": "Virtual MCP Demo powered by Solo Enterprise for agentgateway",
+          "logo_url": "https://agentgateway.dev/agw-dark.svg",
+          "legal_text": "By clicking Allow, you authorize the Virtual MCP gateway to act on your behalf when calling this MCP server."
+        }
+      }

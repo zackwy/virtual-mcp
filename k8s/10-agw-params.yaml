@@ -1,0 +1,37 @@
+# Points the gateway proxy at the STS so it can exchange the caller's downstream
+# Entra token for the upstream (Atlassian) token stored during elicitation.
+#
+# Re-applies 02-gateway.yaml's Gateway with a parametersRef added; everything
+# else about the listener is unchanged.
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayParameters
+metadata:
+  name: agw-params
+  namespace: agentgateway-system
+spec:
+  env:
+    - name: STS_URI
+      value: http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777/elicitations/oauth2/token
+    # SA token the proxy presents to the STS as the "actor" identity.
+    - name: STS_AUTH_TOKEN
+      value: /var/run/secrets/xds-tokens/xds-token
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentgateway-proxy
+  namespace: agentgateway-system
+spec:
+  gatewayClassName: enterprise-agentgateway
+  infrastructure:
+    parametersRef:
+      group: enterpriseagentgateway.solo.io
+      kind: EnterpriseAgentgatewayParameters
+      name: agw-params
+  listeners:
+    - protocol: HTTP
+      port: 80
+      name: http
+      allowedRoutes:
+        namespaces:
+          from: All
