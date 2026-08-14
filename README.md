@@ -72,7 +72,7 @@ For the [tool filtering](#filter-tools-by-identity-microsoft-entra-id) section o
 
 For the [backend auth](#backend-auth-for-a-remote-mcp-server-atlassian) section only:
 
-- Solo Enterprise for agentgateway `v2026.8.0` or later (the consent screen is not in `v2026.7.0`)
+- Solo Enterprise for agentgateway `v2026.8.0` or later
 - An Atlassian Cloud account with Jira and/or Confluence access
 
 Set your license key:
@@ -101,13 +101,13 @@ helm upgrade -i enterprise-agentgateway-crds \
   oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway-crds \
   --create-namespace \
   --namespace agentgateway-system \
-  --version v2026.7.0
+  --version v2026.8.0
 
 # Control plane
 helm upgrade -i enterprise-agentgateway \
   oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway \
   -n agentgateway-system \
-  --version v2026.7.0 \
+  --version v2026.8.0 \
   --set-string licensing.licenseKey=${AGENTGATEWAY_LICENSE_KEY}
 
 kubectl rollout status deploy -n agentgateway-system --timeout=120s
@@ -560,6 +560,7 @@ Install Tempo and Grafana:
 
 ```bash
 helm repo add grafana-community https://grafana-community.github.io/helm-charts
+kubectl create namespace telemetry
 helm upgrade --install tempo grafana-community/tempo --namespace=telemetry
 helm upgrade --install grafana grafana-community/grafana --namespace=telemetry
 ```
@@ -710,7 +711,7 @@ Backend auth is split between the Helm values and a policy on the backend:
 | `spec.backend.entTokenExchange.solo.elicitation`          | Attaches the elicited token to upstream calls.                                               |
 | `policies.mcp.authentication.resourceMetadata['agentgateway.dev/issuer-proxy']` | Routes client login through the gateway's issuer instead of straight to the IdP. |
 
-To target a different release, change `--version v2026.7.0` in the Helm commands to match your licensed version.
+To target a different release, change `--version v2026.8.0` in the Helm commands to match your licensed version.
 
 ---
 
@@ -765,9 +766,6 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/oauth-issuer/.wel
 # Elicitation policy accepted
 kubectl get enterpriseagentgatewaypolicy mcp-atlassian-elicit -n agentgateway-system \
   -o jsonpath='{range .status.ancestors[0].conditions[*]}{.type}={.status} reason={.reason} msg={.message}{"\n"}{end}'
-
-# STS is running (no pod means tokenExchange.enabled didn't take)
-kubectl get pods -n agentgateway-system
 
 # The proxy picked up the STS env from the parametersRef
 kubectl get deploy agentgateway-proxy -n agentgateway-system \
@@ -875,7 +873,7 @@ kubectl delete namespace agentgateway-system
 
 | Component                          | Version    |
 | ---------------------------------- | ---------- |
-| Solo Enterprise for agentgateway   | `v2026.7.0` (`v2026.8.0`+ for backend auth) |
+| Solo Enterprise for agentgateway   | `v2026.8.0`|
 | Kubernetes Gateway API             | `v1.5.0`   |
 | MCP Inspector                      | `0.21.2`   |
 | Node.js (for Inspector)            | `20+`      |
