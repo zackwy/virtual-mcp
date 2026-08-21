@@ -1,0 +1,52 @@
+# Backend auth: the upstream OAuth leg against Postman.
+#
+# Postman's US server advertises everything the brokered flow needs:
+#
+#   $ curl -s https://mcp.postman.com/.well-known/oauth-authorization-server
+#   {"issuer":"https://mcp.postman.com",
+#    "authorization_endpoint":"https://mcp.postman.com/authorize",
+#    "token_endpoint":"https://mcp.postman.com/token",
+#    "registration_endpoint":"https://mcp.postman.com/register",
+#    "revocation_endpoint":"https://mcp.postman.com/revoke",
+#    "token_endpoint_auth_methods_supported":["none","client_secret_basic","client_secret_post"],
+#    "code_challenge_methods_supported":["S256"],
+#    "grant_types_supported":["authorization_code","refresh_token"]}
+#
+# There is no scopes_supported key in that response at all.
+#
+# `issuer` equals the host, so unlike Atlassian (cf.mcp.atlassian.com) baseUrl
+# is simply the server URL. registration_endpoint is present, so the gateway
+# registers itself -- no Postman app, client id, or secret to manage.
+#
+# The EU server (mcp.eu.postman.com) does NOT support OAuth. Use the auth-only
+# pattern from 16-mcp-dynatrace-auth.yaml with a Postman API key instead.
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-postman-elicit
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: mcp-postman
+  backend:
+    entElicitation:
+      brokered:
+        mcpResourcePath: /mcp/postman
+        chainedAuth:
+          oauth:
+            baseUrl: https://mcp.postman.com
+            clientName: Postman
+            # Deliberately no `scopes`. Postman's metadata has no
+            # scopes_supported key at all -- it has no scope vocabulary, and
+            # sending one risks invalid_scope.
+            # The token it issues is bound to the authorizing Postman user, and
+            # refresh_token is in grant_types_supported, so refresh still works
+            # without asking for offline_access.
+            consent:
+              logoUrl: https://voyager.postman.com/logo/postman-logo-icon-orange.svg
+              legalText: "By clicking Allow, you authorize the Virtual MCP gateway to read and manage your Postman workspaces, collections, and APIs on your behalf."
+    entTokenExchange:
+      solo:
+        elicitation: {}

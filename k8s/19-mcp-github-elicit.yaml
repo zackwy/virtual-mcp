@@ -1,0 +1,61 @@
+# Backend auth: the upstream OAuth leg against GitHub.
+#
+# GitHub serves authorization-server metadata (issuer
+# https://github.com/login/oauth) but publishes NO registration_endpoint, so
+# dynamic client registration is impossible -- the Atlassian trick of letting
+# the gateway register itself does not apply. The upstream client is a GitHub
+# App, and its client id and secret are supplied statically here.
+#
+# GitHub App vs OAuth App matters: only a GitHub App with "Expire user
+# authorization tokens" enabled issues refresh tokens, which is what lets the
+# controller refresh the stored upstream token instead of forcing the user back
+# through the browser every 8 hours.
+#
+# Note: this YAML is intended to be used with envsubst to inject GITHUB_CLIENT_ID
+# envsubst < 19-mcp-github-elicit.yaml | kubectl apply -f -
+#
+# Create the secret first (it is not committed):
+#   kubectl create secret generic github-oauth-client -n agentgateway-system \
+#     --from-literal=client_secret=${GITHUB_CLIENT_SECRET}
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-github-elicit
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: mcp-github
+  backend:
+    entElicitation:
+      brokered:
+        mcpResourcePath: /mcp/github
+        chainedAuth:
+          oauth:
+            # Endpoints are given explicitly rather than via `baseUrl`
+            # discovery. GitHub's metadata lives at the RFC 8414 path-inserted
+            # location -- https://github.com/.well-known/oauth-authorization-server/login/oauth
+            # -- and carries no registration_endpoint, so discovery buys nothing
+            # here and the static client is required either way.
+            authorizeUrl: https://github.com/login/oauth/authorize
+            accessTokenUrl: https://github.com/login/oauth/access_token
+            clientId: ${GITHUB_CLIENT_ID}
+            clientSecretRef:
+              name: github-oauth-client
+              key: client_secret
+            # A GitHub App ignores the `scope` parameter -- its permissions come
+            # from the app registration and its installation. offline_access is
+            # the one scope GitHub's metadata advertises, and it is what the
+            # refresh-token grant keys on.
+            scopes:
+              - offline_access
+            clientName: GitHub
+            # Overrides the controller-level consent defaults for this backend
+            # only. Set `disabled: true` to skip the consent screen entirely.
+            consent:
+              logoUrl: https://github.githubassets.com/assets/GitHub-Logo-ee398b662d42.png
+              legalText: "By clicking Allow, you authorize the Virtual MCP gateway to read your GitHub repositories, issues, and pull requests on your behalf."
+    entTokenExchange:
+      solo:
+        elicitation: {}

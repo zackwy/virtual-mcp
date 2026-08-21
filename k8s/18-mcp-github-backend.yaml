@@ -1,0 +1,52 @@
+# GitHub's hosted MCP server, fronted by the gateway at /mcp/github and
+# protected by the same Entra tenant used everywhere else in the demo.
+#
+# This is the same dual-OAuth shape as Atlassian -- downstream Entra login,
+# gateway consent screen, upstream GitHub OAuth -- with one difference that
+# drives everything in 19-mcp-github-elicit.yaml: GitHub does NOT support
+# dynamic client registration, so the upstream client is a GitHub App you
+# register by hand.
+#
+# Note: this YAML is intended to be used with envsubst to inject
+# ENTRA_TENANT_ID / ENTRA_CLIENT_ID / GW_ADDRESS
+# envsubst < 18-mcp-github-backend.yaml | kubectl apply -f -
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: mcp-github
+  namespace: agentgateway-system
+spec:
+  mcp:
+    targets:
+      - name: mcp-target
+        static:
+          # GitHub's streamable-HTTP MCP endpoint. /readonly serves the same
+          # toolset with mutating tools removed; /x/<toolset> serves a single
+          # toolset (e.g. /x/repos). Use one of those to narrow the blast radius
+          # instead of filtering tools at the gateway.
+          path: /mcp/
+          host: api.githubcopilot.com
+          port: 443
+  policies:
+    tls: {}
+    mcp:
+      authentication:
+        mode: Strict
+        # Entra issues v1.0 access tokens by default. If you set
+        # "accessTokenAcceptedVersion": 2 in the app manifest, change this to
+        # https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0
+        issuer: https://sts.windows.net/${ENTRA_TENANT_ID}/
+        audiences:
+          - api://${ENTRA_CLIENT_ID}
+        jwks:
+          backendRef:
+            name: entra-jwks
+            group: agentgateway.dev
+            kind: AgentgatewayBackend
+          cacheDuration: 24h
+          jwksPath: /${ENTRA_TENANT_ID}/discovery/v2.0/keys
+        resourceMetadata:
+          agentgateway.dev/issuer-proxy: "http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777/oauth-issuer"
+          authorizationServers:
+            - "http://${GW_ADDRESS}/mcp/github"
+          resource: "http://${GW_ADDRESS}/mcp/github"

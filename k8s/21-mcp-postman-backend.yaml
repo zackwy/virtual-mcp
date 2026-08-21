@@ -1,0 +1,51 @@
+# Postman's hosted MCP server, fronted by the gateway at /mcp/postman and
+# protected by the same Entra tenant used everywhere else in the demo.
+#
+# This is the closest analogue to the Atlassian backend: Postman's US server is
+# MCP-authorization-spec compliant, including dynamic client registration, so
+# the gateway registers itself for the upstream leg and there is no Postman app
+# to create by hand.
+#
+# Note: this YAML is intended to be used with envsubst to inject
+# ENTRA_TENANT_ID / ENTRA_CLIENT_ID / GW_ADDRESS
+# envsubst < 21-mcp-postman-backend.yaml | kubectl apply -f -
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: mcp-postman
+  namespace: agentgateway-system
+spec:
+  mcp:
+    targets:
+      - name: mcp-target
+        static:
+          # Postman serves three toolsets on three paths: /mcp is the full
+          # ~100-tool API surface, /minimal is a small curated set, /code is the
+          # code-generation subset. Start with /minimal if a client chokes on
+          # the full listing.
+          path: /mcp
+          host: mcp.postman.com
+          port: 443
+  policies:
+    tls: {}
+    mcp:
+      authentication:
+        mode: Strict
+        # Entra issues v1.0 access tokens by default. If you set
+        # "accessTokenAcceptedVersion": 2 in the app manifest, change this to
+        # https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0
+        issuer: https://sts.windows.net/${ENTRA_TENANT_ID}/
+        audiences:
+          - api://${ENTRA_CLIENT_ID}
+        jwks:
+          backendRef:
+            name: entra-jwks
+            group: agentgateway.dev
+            kind: AgentgatewayBackend
+          cacheDuration: 24h
+          jwksPath: /${ENTRA_TENANT_ID}/discovery/v2.0/keys
+        resourceMetadata:
+          agentgateway.dev/issuer-proxy: "http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777/oauth-issuer"
+          authorizationServers:
+            - "http://${GW_ADDRESS}/mcp/postman"
+          resource: "http://${GW_ADDRESS}/mcp/postman"

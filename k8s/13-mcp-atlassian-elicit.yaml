@@ -24,14 +24,25 @@ spec:
         chainedAuth:
           oauth:
             # Must match the `issuer` in Atlassian's authorization server
-            # metadata, which is cf.mcp.atlassian.com -- NOT mcp.atlassian.com.
-            # The gateway rejects the flow if the two disagree.
-            baseUrl: https://cf.mcp.atlassian.com
+            # metadata exactly; the gateway rejects the flow if the two disagree.
+            # Atlassian has changed this before -- it used to declare
+            # cf.mcp.atlassian.com -- so verify rather than assume:
+            #   curl -s https://mcp.atlassian.com/.well-known/oauth-authorization-server | jq -r .issuer
+            # Both mcp. and cf.mcp. hosts serve metadata; as of 2026-08-21 both
+            # declare "https://mcp.atlassian.com".
+            baseUrl: https://mcp.atlassian.com
             scopes:
               - read:jira-work
               - read:confluence-content.summary
-              # Required for the gateway to refresh the upstream token; the
-              # consent grant lives until the refresh token expires.
+              # How Atlassian is asked to issue a refresh token. The gateway
+              # refreshes with whatever refresh token the provider returns --
+              # under 10% of remaining lifetime, or once already expired -- and
+              # providers signal that differently: Postman issues one with no
+              # scopes at all, GitHub Apps key it on the app's token-expiry
+              # setting. So this scope is an Atlassian requirement, not a
+              # gateway one. Without a refresh token the elicitation resets to
+              # pending and the user re-consents; the grant lives exactly as
+              # long as the refresh token does.
               - offline_access
             clientName: Atlassian
             # Overrides the controller-level consent defaults for this backend

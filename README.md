@@ -472,11 +472,17 @@ The JWKS backend from the tool-filtering section (`k8s/07-entra-jwks-backend.yam
 
 Two values in the upstream config are easy to get wrong, and both fail loudly:
 
-- **`baseUrl` must be `https://cf.mcp.atlassian.com`,** not `https://mcp.atlassian.com`. Atlassian serves its authorization-server metadata from both hosts but declares `"issuer": "https://cf.mcp.atlassian.com"` in each. The gateway requires `baseUrl` to equal that issuer and refuses the flow otherwise, with `/oauth-issuer/authorize` returning `500 {"error":"server_error"}` and this in the controller log:
+- **`baseUrl` must equal the `issuer` Atlassian declares, and Atlassian has changed it.** Both `mcp.atlassian.com` and `cf.mcp.atlassian.com` serve authorization-server metadata; as of 2026-08-21 both declare `"issuer": "https://mcp.atlassian.com"`, which is why the manifest uses that. It previously declared `cf.mcp.atlassian.com`. Check before you debug anything else:
+
+  ```bash
+  curl -s https://mcp.atlassian.com/.well-known/oauth-authorization-server | jq -r .issuer
+  ```
+
+  The gateway requires `baseUrl` to equal that issuer and refuses the flow otherwise, with `/oauth-issuer/authorize` returning `500 {"error":"server_error"}` and this in the controller log:
 
   ```
   failed to start auth flow ... unknown resource: authorization server metadata
-  issuer "https://cf.mcp.atlassian.com" does not match base_url "https://mcp.atlassian.com"
+  issuer "https://mcp.atlassian.com" does not match base_url "https://cf.mcp.atlassian.com"
   ```
 
 - **The upstream target path is `/v1/mcp`** (Atlassian's streamable-HTTP endpoint; `/v1/sse` is the SSE one). `mcpResourcePath: /mcp/atlassian` in the policy is the path *on the gateway* — a different thing — and using it upstream gets a 404 from Atlassian.
