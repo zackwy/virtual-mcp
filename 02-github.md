@@ -58,21 +58,6 @@ Compared with the Atlassian backend:
 | Upstream token life   | Per Atlassian's grant                | 8 hours, refreshable for 6 months (GitHub App, if token expiry is enabled) |
 | Consent screen        | Yes                                  | Yes                                                   |
 
-## GitHub App or OAuth App?
-
-Both work; the App is the better demo and the better production story.
-
-| | GitHub App (recommended) | OAuth App |
-| --- | --- | --- |
-| Permission model | Fine-grained, per-repository, chosen at install | Coarse classic scopes (`repo` is all-or-nothing) |
-| Token lifetime | 8h user token + refresh token, *if* "Expire user authorization tokens" is on | Never expires, no refresh token |
-| Gateway refresh | Works — the controller refreshes at <10% of remaining lifetime | Breaks: no `expires_in` and no refresh token, so the controller assumes a 1h lifetime and re-elicits hourly |
-| Blast radius | Only the repos the app is installed on | Everything the user can reach |
-
-The refresh row is the one that bites. GitHub OAuth Apps return neither `expires_in` nor a refresh token, and the controller "assumes a lifetime of one hour" when a provider omits `expires_in` — so it tries to refresh at roughly six minutes remaining, finds nothing to refresh with, and "resets the elicitation to a pending state," sending the user back through consent. The token itself never expires; the *session* still ends every hour. A GitHub App with token expiry enabled gives an 8-hour token that renews silently instead.
-
-An OAuth App's non-expiring token is also a credential sitting in the STS with no natural end, which is exactly what this architecture is supposed to avoid. The manifests assume a GitHub App.
-
 ---
 
 ## Prerequisites
@@ -164,8 +149,6 @@ And in [`19-mcp-github-elicit.yaml`](k8s/19-mcp-github-elicit.yaml):
 kubectl port-forward deployment/agentgateway-proxy -n agentgateway-system 8080:80
 npx @modelcontextprotocol/inspector@0.21.2
 ```
-
-> If the Inspector reports `Failed to connect … fetch failed` after a few milliseconds, that is the port-forward, not the auth flow — a real auth failure comes back as a `401` with a `WWW-Authenticate` header, not a transport error. `port-forward deployment/...` binds to one pod and does not follow a rollout, so applying `k8s/10-agw-params.yaml` (which adds the `parametersRef` and rolls the proxy) silently kills an existing forward. Restart it. `curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/oauth-issuer/.well-known/oauth-authorization-server` returning `000` confirms it.
 
 - **Transport:** `Streamable HTTP`
 - **URL:** `http://localhost:8080/mcp/github`
