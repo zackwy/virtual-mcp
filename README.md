@@ -90,7 +90,7 @@ Run the steps in order from the repo root. Every manifest lives in [`k8s/`](k8s/
 ### 1. Install the Gateway API CRDs
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml
 ```
 
 ### 2. Install Solo Enterprise for agentgateway
@@ -101,13 +101,13 @@ helm upgrade -i enterprise-agentgateway-crds \
   oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway-crds \
   --create-namespace \
   --namespace agentgateway-system \
-  --version v2026.8.0
+  --version v2026.9.1
 
 # Control plane
 helm upgrade -i enterprise-agentgateway \
   oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway \
   -n agentgateway-system \
-  --version v2026.8.0 \
+  --version v2026.9.1 \
   --set-string licensing.licenseKey=${AGENTGATEWAY_LICENSE_KEY}
 
 kubectl rollout status deploy -n agentgateway-system --timeout=120s
@@ -417,12 +417,12 @@ envsubst < helm/enterprise-agentgateway-values.yaml > /tmp/agw-values.yaml
 helm upgrade -i enterprise-agentgateway-crds \
   oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway-crds \
   -n agentgateway-system \
-  --version v2026.8.0
+  --version v2026.9.1
 
 helm upgrade -i enterprise-agentgateway \
   oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway \
   -n agentgateway-system \
-  --version v2026.8.0 \
+  --version v2026.9.1 \
   -f /tmp/agw-values.yaml
 
 kubectl rollout status deploy -n agentgateway-system --timeout=180s
@@ -717,7 +717,7 @@ Backend auth is split between the Helm values and a policy on the backend:
 | `spec.backend.entTokenExchange.solo.elicitation`          | Attaches the elicited token to upstream calls.                                               |
 | `policies.mcp.authentication.resourceMetadata['agentgateway.dev/issuer-proxy']` | Routes client login through the gateway's issuer instead of straight to the IdP. |
 
-To target a different release, change `--version v2026.8.0` in the Helm commands to match your licensed version.
+To target a different release, change `--version v2026.9.1` in the Helm commands to match your licensed version.
 
 ---
 
@@ -870,7 +870,10 @@ kubectl delete namespace agentgateway-system
     ├── 11-oauth-issuer-route.yaml        # Publishes the OAuth issuer proxy at /oauth-issuer
     ├── 12-mcp-atlassian-backend.yaml     # Remote Atlassian MCP server + downstream Entra authn
     ├── 13-mcp-atlassian-elicit.yaml      # ★ Upstream OAuth leg + consent screen
-    └── 14-mcp-atlassian-httproute.yaml   # Exposes Atlassian at /mcp/atlassian
+    ├── 14-mcp-atlassian-httproute.yaml   # Exposes Atlassian at /mcp/atlassian
+    ├── 15-mcp-dynatrace-backend.yaml     # Remote Dynatrace MCP server + downstream Entra authn
+    ├── 16-mcp-dynatrace-elicit.yaml      # ★ Upstream Dynatrace OAuth leg (discovery + PKCE)
+    └── 17-mcp-dynatrace-httproute.yaml   # Exposes Dynatrace at /mcp/dynatrace
 ```
 
 ---
@@ -879,8 +882,8 @@ kubectl delete namespace agentgateway-system
 
 | Component                          | Version    |
 | ---------------------------------- | ---------- |
-| Solo Enterprise for agentgateway   | `v2026.8.0`|
-| Kubernetes Gateway API             | `v1.5.0`   |
+| Solo Enterprise for agentgateway   | `v2026.9.1`|
+| Kubernetes Gateway API             | `v1.6.1`   |
 | MCP Inspector                      | `0.21.2`   |
 | Node.js (for Inspector)            | `20+`      |
 

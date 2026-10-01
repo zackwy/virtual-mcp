@@ -7,7 +7,7 @@
 #   envsubst < helm/enterprise-agentgateway-values.yaml > /tmp/agw-values.yaml
 #   helm upgrade -i enterprise-agentgateway \
 #     oci://us-docker.pkg.dev/solo-public/enterprise-agentgateway/charts/enterprise-agentgateway \
-#     -n agentgateway-system --version v2026.8.0 -f /tmp/agw-values.yaml
+#     -n agentgateway-system --version v2026.9.1 -f /tmp/agw-values.yaml
 #
 # Required env: AGENTGATEWAY_LICENSE_KEY, GW_ADDRESS, ENTRA_TENANT_ID,
 #               ENTRA_CLIENT_ID, ISSUER_CLIENT_ID, ISSUER_CLIENT_SECRET

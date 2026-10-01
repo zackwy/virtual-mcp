@@ -1,0 +1,53 @@
+# Backend auth: the upstream OAuth leg.
+#
+# After the caller authenticates with Entra and accepts the gateway consent
+# screen, the gateway runs a second OAuth flow against Dynatrace SSO, stores the
+# resulting token against that user's downstream identity, and attaches it to
+# upstream calls.
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-dynatrace-elicit
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: enterpriseagentgateway.solo.io
+      kind: EnterpriseAgentgatewayBackend
+      name: mcp-dynatrace
+  backend:
+    entElicitation:
+      brokered:
+        mcpResourcePath: /mcp/dynatrace
+        chainedAuth:
+          oauth:
+            # Discovery rather than pinned authorizeUrl/accessTokenUrl -- the
+            # CRD allows one form or the other, never a mix. The :443 is not
+            # decoration: Dynatrace declares its issuer as
+            # "https://sso.dynatrace.com:443", and base_url must match it
+            # literally or discovery fails the issuer check.
+            baseUrl: "https://sso.dynatrace.com:443"
+            # Force PKCE, not required but a safeguard
+            pkce: Always
+            clientId: ${DT_CLIENT_ID}
+            clientSecretRef:
+              name: dynatrace-oauth-client
+              key: client_secret
+            # Every scope requested here must also be granted to the OAuth
+            # client in Dynatrace, or the authorize call fails with
+            # invalid_scope. The two mcp-gateway scopes are required for any
+            # MCP access; the rest gate individual tools.
+            scopes:
+              - mcp-gateway:servers:invoke
+              - mcp-gateway:servers:read
+              - ai:operator:execute
+              - app-engine:apps:run
+              - storage:logs:read
+            clientName: Dynatrace
+            # Overrides the controller-level consent defaults for this backend
+            # only. Set `disabled: true` to skip the consent screen entirely, or
+            # add `logoUrl` to show Dynatrace's logo instead of the default.
+            consent:
+              legalText: "By clicking Allow, you authorize the Virtual MCP gateway to query your Dynatrace environment on your behalf."
+    entTokenExchange:
+      solo:
+        elicitation: {}

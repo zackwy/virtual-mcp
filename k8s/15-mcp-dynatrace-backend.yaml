@@ -1,0 +1,45 @@
+# The remote Dynatrace MCP server, fronted by the gateway at /mcp/dynatrace and
+# protected by the same Entra tenant used everywhere else in the demo.
+#
+# Authentication here is the DOWNSTREAM leg only -- it proves who the caller is.
+# The upstream leg (the gateway getting a Dynatrace token on that user's behalf)
+# lives in 16-mcp-dynatrace-elicit.yaml.
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayBackend
+metadata:
+  name: mcp-dynatrace
+  namespace: agentgateway-system
+spec:
+  mcp:
+    targets:
+      - name: mcp-target
+        static:
+          # Dynatrace's streamable-HTTP MCP endpoint, served by the platform's
+          # MCP gateway. v0.1 is the current API version of that path.
+          path: /platform-reserved/mcp-gateway/v0.1/servers/dynatrace-mcp/mcp
+          # The full environment host, e.g. abc12345.apps.dynatrace.com
+          host: ${DT_ENVIRONMENT}
+          port: 443
+  policies:
+    tls: {}
+    mcp:
+      authentication:
+        mode: Strict
+        # Entra issues v1.0 access tokens by default. If you set
+        # "accessTokenAcceptedVersion": 2 in the app manifest, change this to
+        # https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0
+        issuer: https://sts.windows.net/${ENTRA_TENANT_ID}/
+        audiences:
+          - api://${ENTRA_CLIENT_ID}
+        jwks:
+          backendRef:
+            name: entra-jwks
+            group: agentgateway.dev
+            kind: AgentgatewayBackend
+          cacheDuration: 24h
+          jwksPath: /${ENTRA_TENANT_ID}/discovery/v2.0/keys
+        resourceMetadata:
+          agentgateway.dev/issuer-proxy: "http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777/oauth-issuer"
+          authorizationServers:
+            - "https://${GW_ADDRESS}/mcp/dynatrace"
+          resource: "https://${GW_ADDRESS}/mcp/dynatrace"
